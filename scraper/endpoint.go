@@ -28,7 +28,14 @@ type Endpoint struct {
 	Headers map[string]string     `json:"headers,omitempty"`
 	List    string                `json:"list,omitempty"`
 	Result  map[string]Extractors `json:"result"`
-	Debug   bool
+	// Chain links this endpoint to an upstream endpoint. When set,
+	// every upstream result triggers one call of this endpoint, with
+	// the upstream's fields available as template params.
+	Chain *Chain `json:"chain,omitempty"`
+	Debug bool
+	// registry is wired up by Handler.LoadConfig so chained endpoints
+	// can resolve their upstream. Never serialised.
+	registry Config
 }
 
 // extract 1 result using this endpoints extractor map
@@ -44,8 +51,35 @@ func (e *Endpoint) extract(sel *goquery.Selection) Result {
 	return r
 }
 
-// Execute will execute an Endpoint with the given params
+// Execute will execute an Endpoint with the given params. Endpoints
+// configured with a Chain run their upstream first and fan out one
+// downstream call per upstream result.
 func (e *Endpoint) Execute(params map[string]string) ([]Result, error) {
+	return e.executeAny(stringParams(params))
+}
+
+// executeAny is the internal entry point that accepts the richer
+// map[string]any used to propagate upstream results through a chain.
+func (e *Endpoint) executeAny(params map[string]any) ([]Result, error) {
+	if e.Chain != nil && e.Chain.From != "" {
+		return e.runChain(params)
+	}
+	return e.executeOnce(params)
+}
+
+// stringParams widens the public map[string]string params into the
+// map[string]any shape used internally.
+func stringParams(in map[string]string) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// executeOnce performs a single HTTP call of the endpoint and extracts
+// its results.
+func (e *Endpoint) executeOnce(params map[string]any) ([]Result, error) {
 	url, err := template(true, e.URL, params)
 	if err != nil {
 		return nil, err
@@ -73,9 +107,15 @@ func (e *Endpoint) Execute(params map[string]string) ([]Result, error) {
 	if len(e.Headers) > 0 {
 		headers := make([]any, 0, len(e.Headers)*2)
 		for k, v := range e.Headers {
-			headers = append(headers, k, v)
+			// header values are templates; keys stay static. A missing
+			// param reports the same "missing param" error as URL/Body.
+			hv, err := template(false, v, params)
+			if err != nil {
+				return nil, err
+			}
+			headers = append(headers, k, hv)
 			if e.Debug {
-				logf("header: %s=%s", k, v)
+				logf("header: %s=%s", k, hv)
 			}
 		}
 		req = req.AddHeaders(headers...)
@@ -83,13 +123,34 @@ func (e *Endpoint) Execute(params map[string]string) ([]Result, error) {
 
 	result := req.Do()
 	if result.IsErr() {
-		return nil, result.Err()
+		return nil, &UpstreamError{
+			Endpoint: e.Name,
+			Detail:   result.Err().Error(),
+			Err:      result.Err(),
+		}
 	}
 	resp := result.Ok()
 	defer resp.Body.Close()
 
 	if e.Debug {
 		logf("resp: %d (type: %s)", resp.StatusCode, resp.Headers.Get("Content-Type"))
+	}
+
+	// A non-2xx response is an upstream failure: never try to parse an
+	// error page into an empty result list.
+	if !resp.StatusCode.IsSuccess() {
+		detail := resp.StatusCode.Text()
+		if resp.Body != nil && resp.Body.Reader != nil {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body.Reader, 512))
+			if s := strings.TrimSpace(string(b)); s != "" {
+				detail = s
+			}
+		}
+		return nil, &UpstreamError{
+			Endpoint: e.Name,
+			Status:   int(resp.StatusCode),
+			Detail:   detail,
+		}
 	}
 
 	mode := e.Mode

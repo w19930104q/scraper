@@ -10,52 +10,52 @@ func TestTemplate(t *testing.T) {
 		name    string
 		isURL   bool
 		str     string
-		vars    map[string]string
+		vars    map[string]any
 		want    string
 		wantErr string
 	}{
 		{
 			name: "basic substitution",
 			str:  "hello {{name}}",
-			vars: map[string]string{"name": "world"},
+			vars: map[string]any{"name": "world"},
 			want: "hello world",
 		},
 		{
 			name: "default value when var missing",
 			str:  "hi {{name:stranger}}",
-			vars: map[string]string{},
+			vars: map[string]any{},
 			want: "hi stranger",
 		},
 		{
 			name: "explicit value beats default",
 			str:  "hi {{name:stranger}}",
-			vars: map[string]string{"name": "alice"},
+			vars: map[string]any{"name": "alice"},
 			want: "hi alice",
 		},
 		{
 			name:    "missing required var",
 			str:     "hi {{name}}",
-			vars:    map[string]string{},
+			vars:    map[string]any{},
 			wantErr: "missing param: name",
 		},
 		{
 			name:  "url-escape after question mark",
 			isURL: true,
 			str:   "https://example.com/search?q={{q}}",
-			vars:  map[string]string{"q": "hello world"},
+			vars:  map[string]any{"q": "hello world"},
 			want:  "https://example.com/search?q=hello+world",
 		},
 		{
 			name:  "no escape before question mark",
 			isURL: true,
 			str:   "https://example.com/{{path}}?q=x",
-			vars:  map[string]string{"path": "a/b"},
+			vars:  map[string]any{"path": "a/b"},
 			want:  "https://example.com/a/b?q=x",
 		},
 		{
 			name: "first missing param wins",
 			str:  "{{a}} and {{b}}",
-			vars: map[string]string{},
+			vars: map[string]any{},
 			// no value substituted on error
 			wantErr: "missing param: a",
 		},

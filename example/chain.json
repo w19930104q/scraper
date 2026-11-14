@@ -1,0 +1,26 @@
+{
+  "/users": {
+    "mode": "json",
+    "url": "https://api.example.com/users?team={{team}}",
+    "list": ".users[]",
+    "result": {
+      "id": ".id",
+      "name": ".name"
+    }
+  },
+  "/user-posts": {
+    "mode": "json",
+    "url": "https://api.example.com/users/{{id}}/posts",
+    "headers": {
+      "X-User-Name": "{{name}}"
+    },
+    "list": ".posts[]",
+    "result": {
+      "title": ".title",
+      "url": ".url"
+    },
+    "chain": {
+      "from": "users"
+    }
+  }
+}

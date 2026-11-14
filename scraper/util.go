@@ -14,7 +14,14 @@ import (
 
 var templateRe = regexp.MustCompile(`\{\{\s*(\w+)\s*(:(\w+))?\s*\}\}`)
 
-func template(isurl bool, str string, vars map[string]string) (string, error) {
+// missingParamValue marks a template variable that is known to be
+// absent. It lets chain Param mode distinguish "upstream had no such
+// field" from "upstream supplied an empty string".
+type missingParamValue struct{}
+
+var missingParamSentinel any = missingParamValue{}
+
+func template(isurl bool, str string, vars map[string]any) (string, error) {
 	var err error
 	out := templateRe.ReplaceAllStringFunc(str, func(key string) string {
 		if err != nil {
@@ -23,6 +30,11 @@ func template(isurl bool, str string, vars map[string]string) (string, error) {
 		m := templateRe.FindStringSubmatch(key)
 		k := m[1]
 		value, ok := vars[k]
+		if ok {
+			if _, missing := value.(missingParamValue); missing {
+				ok = false
+			}
+		}
 		if !ok {
 			if m[3] != "" {
 				value = m[3]
@@ -31,14 +43,18 @@ func template(isurl bool, str string, vars map[string]string) (string, error) {
 				return ""
 			}
 		}
+		s, ok := value.(string)
+		if !ok {
+			s = fmt.Sprint(value)
+		}
 		if isurl {
 			queryi := strings.Index(str, "?")
 			keyi := strings.Index(str, key)
 			if queryi != -1 && keyi > queryi {
-				value = url.QueryEscape(value)
+				s = url.QueryEscape(s)
 			}
 		}
-		return value
+		return s
 	})
 	if err != nil {
 		return "", err

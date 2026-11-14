@@ -49,6 +49,9 @@ func (h *Handler) LoadConfig(b []byte) error {
 		if h.Log {
 			logf("Loaded endpoint: /%s", k)
 		}
+		// name + registry power chain resolution and stable error output
+		e.Name = k
+		e.registry = c
 		// inherit handler-level Debug + Headers (per-endpoint values win)
 		e.Debug = h.Debug
 		if e.Headers == nil {
@@ -59,6 +62,20 @@ func (h *Handler) LoadConfig(b []byte) error {
 					e.Headers[k] = v
 				}
 			}
+		}
+	}
+	// validate chain wiring: every upstream must exist and no cycles
+	for k, e := range c {
+		if e.Chain != nil && e.Chain.From != "" {
+			if _, ok := c[e.Chain.From]; ok {
+				continue
+			}
+			return fmt.Errorf("endpoint %q chains from unknown endpoint %q", k, e.Chain.From)
+		}
+	}
+	for k, e := range c {
+		if err := e.checkChainCycle(map[string]bool{}); err != nil {
+			return fmt.Errorf("endpoint %q: %w", k, err)
 		}
 	}
 	if h.Debug {
@@ -128,8 +145,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := endpoint.Execute(values)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write(jsonerr(err))
+		writeError(w, err)
 		return
 	}
 	enc := json.NewEncoder(w)

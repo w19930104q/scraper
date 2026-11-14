@@ -145,6 +145,53 @@ Multiple matched elements are comma-joined by default; use `join(sep)` for a dif
 
 Setting `"mode": "json"` switches the endpoint to a JSON-API scraper. `list` and the result fields are then [jq](https://github.com/itchyny/gojq) selectors instead of CSS selectors. As with HTML mode, fields can be a string or an array; arrays are joined with ` | ` to form a jq pipeline (`[".count", "tonumber"]` becomes `.count | tonumber`).
 
+#### Chained endpoints
+
+By default every endpoint scrapes one page on its own. A `chain` makes an endpoint run *after* another endpoint (its upstream) and reuse the upstream's results as template params:
+
+```json
+{
+  "/orders": {
+    "mode": "json",
+    "url": "https://api.example.com/orders",
+    "list": ".orders[]",
+    "result": { "id": ".id", "token": ".token" }
+  },
+  "/order-details": {
+    "mode": "json",
+    "url": "https://api.example.com/orders/{{id}}?token={{token}}",
+    "body": "{\"ref\":\"{{id}}\"}",
+    "headers": { "X-Order-Token": "{{token}}" },
+    "result": { "status": ".status" },
+    "chain": { "from": "orders" }
+  }
+}
+```
+
+* `chain.from` — **Required** the config path of the upstream endpoint (without the leading slash).
+* `chain.param` — **Optional** when set, only this single upstream field is forwarded under that param name. When omitted, every field of each upstream result is merged into the downstream endpoint's params. Upstream values override caller-supplied query params on name collisions.
+
+For every result the upstream produces, the downstream endpoint is called once with that result's fields available as `{{param}}` placeholders in its `url`, `body` and `headers`. Header values are templated like the URL and Body; an unknown param without a `{{name:default}}` still fails with `missing param: name`.
+
+* **Result shape** — an upstream without a `list` produces a single object and a list upstream fans out into an array; the single-object/array response semantics are unchanged.
+* **Failures** — a transport error or any non-2xx response from either hop is an upstream failure, never silently parsed into an empty list. Chained endpoints return a stable error envelope instead of an empty array:
+
+  ```json
+  {
+    "error": "chain endpoint \"order-details\" failed: upstream \"orders\" failed: HTTP 503: ...",
+    "endpoint": "order-details",
+    "status": 503,
+    "upstream": {
+      "error": "upstream \"orders\" failed: HTTP 503: ...",
+      "endpoint": "orders",
+      "status": 503
+    }
+  }
+  ```
+
+  Upstream HTTP failures are served with status `502 Bad Gateway`; local errors (e.g. a missing template param) remain `500`. An upstream that succeeds but returns zero results yields a normal empty array — no downstream call and no error. Chains of arbitrary depth nest one `upstream` object per hop; cycles and references to unknown endpoints are rejected at config load time.
+
+
 ### Go API
 
 Replace `<variable>` with your configuration, documented above.
